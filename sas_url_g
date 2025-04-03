@@ -1,0 +1,70 @@
+import os
+from azure.storage.blob import (
+    ContentSettings, ResourceExistsError, BlobSasPermissions,
+    generate_blob_sas
+)
+from datetime import datetime, timedelta
+
+from azure_blob_connection_manager import AzureBlobConnectionManager
+from models.model_registry import AzureBlobRegistry
+
+# ------------------------ Configurable Inputs ------------------------ #
+TENANT_ID = "CITI"
+RUN_ID = "RUN_CITI_CRE_2024_Q1_001"
+INDUSTRY = "CRE"
+OBLIGOR_NAME = "Sherwood Village Cooperative D Inc"
+LOCAL_FILE_PATH = "loan_CITI_CRE_Q1_2024.pdf"
+CONTENT_TYPE = "application/pdf"
+BLOB_EXPIRY_MINUTES = 60
+# -------------------------------------------------------------------- #
+
+def generate_container_name(tenant_id: str) -> str:
+    return f"loan-docs-{tenant_id.lower()}"
+
+def generate_blob_path(run_id: str, industry: str, obligor: str, file_name: str) -> str:
+    safe_obligor = obligor.replace(" ", "_")
+    return f"{run_id}/{industry}/{safe_obligor}/{file_name}"
+
+def main():
+    # Step 1: Init connection
+    connection_manager = AzureBlobConnectionManager()
+    blob_service_client = connection_manager.get_blob_service_client()
+
+    container_name = generate_container_name(TENANT_ID)
+    blob_folder_path = generate_blob_path(RUN_ID, INDUSTRY, OBLIGOR_NAME, os.path.basename(LOCAL_FILE_PATH))
+    blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_folder_path)
+
+    # Step 2: Ensure container exists
+    try:
+        blob_service_client.create_container(container_name)
+        print(f"✅ Created container: {container_name}")
+    except ResourceExistsError:
+        print(f"ℹ️ Container already exists: {container_name}")
+
+    # Step 3: Upload the file
+    with open(LOCAL_FILE_PATH, "rb") as file:
+        blob_client.upload_blob(
+            file,
+            overwrite=True,
+            content_settings=ContentSettings(content_type=CONTENT_TYPE)
+        )
+        print(f"📤 Uploaded file to blob path: {blob_folder_path}")
+
+    # Step 4: Generate SAS URL
+    sas_token = generate_blob_sas(
+        account_name=AzureBlobRegistry.AZURE_BLOB_ACCOUNT_NAME.value,
+        container_name=container_name,
+        blob_name=blob_folder_path,
+        account_key=connection_manager.blob_account_key,
+        permission=BlobSasPermissions(read=True),
+        expiry=datetime.utcnow() + timedelta(minutes=BLOB_EXPIRY_MINUTES)
+    )
+
+    blob_url = f"https://{AzureBlobRegistry.AZURE_BLOB_ACCOUNT_NAME.value}.blob.core.windows.net/{container_name}/{blob_folder_path}"
+    sas_url = f"{blob_url}?{sas_token}"
+
+    print(f"🔐 SAS URL (valid for {BLOB_EXPIRY_MINUTES} minutes):")
+    print(sas_url)
+
+if __name__ == "__main__":
+    main()
