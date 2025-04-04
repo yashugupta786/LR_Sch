@@ -1,0 +1,147 @@
+{
+  "run_id": "RUN001",
+  "tenant_id": "medconnect",
+  "engagement_id": "applebank",
+  "metadata": [
+    {
+      "year": 2024,
+      "quarter": "Q1",
+      "industries": [
+        {
+          "industry": "CRE",
+          "obligors": [
+            {
+              "obligor_name": "Sherwood Village",
+              "doc_run_id": "CRE_Q1_2024_Sherwood_Village",
+              "documents": [
+                {
+                  "doc_id": "DOC001",
+                  "original_filename": "Loan_Sherwood_1.pdf",
+                  "base64": "dGVzdCBjb250ZW50IDE=",  # base64 for "test content 1"
+                  "file_hash": "hash1",
+                  "status": {
+                    "text_extraction": "PENDING",
+                    "vector_indexing": "PENDING"
+                  },
+                  "renamed_filename": null,
+                  "blob_path": null,
+                  "sas_url": null,
+                  "sharepoint_info": {
+                    "source_site": "https://sharepoint.com/sites/applebank",
+                    "source_folder": "/Q1_2024/CRE/Sherwood Village"
+                  },
+                  "steps": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "year": 2024,
+      "quarter": "Q2",
+      "industries": [
+        {
+          "industry": "C&I",
+          "obligors": [
+            {
+              "obligor_name": "Everest Capital",
+              "doc_run_id": "C&I_Q2_2024_Everest_Capital",
+              "documents": [
+                {
+                  "doc_id": "DOC002",
+                  "original_filename": "Loan_Everest.pdf",
+                  "base64": "dGVzdCBjb250ZW50IDI=",  # base64 for "test content 2"
+                  "file_hash": "hash2",
+                  "status": {
+                    "text_extraction": "PENDING",
+                    "vector_indexing": "PENDING"
+                  },
+                  "renamed_filename": null,
+                  "blob_path": null,
+                  "sas_url": null,
+                  "sharepoint_info": {
+                    "source_site": "https://sharepoint.com/sites/applebank",
+                    "source_folder": "/Q2_2024/C&I/Everest Capital"
+                  },
+                  "steps": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "year": 2025,
+      "quarter": "Q1",
+      "industries": [
+        {
+          "industry": "CRE",
+          "obligors": [
+            {
+              "obligor_name": "Valley Homes",
+              "doc_run_id": "CRE_Q1_2025_Valley_Homes",
+              "documents": [
+                {
+                  "doc_id": "DOC003",
+                  "original_filename": "Loan_Valley.pdf",
+                  "base64": "dGVzdCBjb250ZW50IDM=",  # base64 for "test content 3"
+                  "file_hash": "hash3",
+                  "status": {
+                    "text_extraction": "PENDING",
+                    "vector_indexing": "PENDING"
+                  },
+                  "renamed_filename": null,
+                  "blob_path": null,
+                  "sas_url": null,
+                  "sharepoint_info": {
+                    "source_site": "https://sharepoint.com/sites/applebank",
+                    "source_folder": "/Q1_2025/CRE/Valley Homes"
+                  },
+                  "steps": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "year": 2025,
+      "quarter": "Q2",
+      "industries": [
+        {
+          "industry": "C&I",
+          "obligors": [
+            {
+              "obligor_name": "Oakwood Partners",
+              "doc_run_id": "C&I_Q2_2025_Oakwood_Partners",
+              "documents": [
+                {
+                  "doc_id": "DOC004",
+                  "original_filename": "Loan_Oakwood.pdf",
+                  "base64": "dGVzdCBjb250ZW50IDQ=",  # base64 for "test content 4"
+                  "file_hash": "hash4",
+                  "status": {
+                    "text_extraction": "PENDING",
+                    "vector_indexing": "PENDING"
+                  },
+                  "renamed_filename": null,
+                  "blob_path": null,
+                  "sas_url": null,
+                  "sharepoint_info": {
+                    "source_site": "https://sharepoint.com/sites/applebank",
+                    "source_folder": "/Q2_2025/C&I/Oakwood Partners"
+                  },
+                  "steps": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
