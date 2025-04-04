@@ -1,0 +1,141 @@
+# File: app/blob/blob_client.py
+
+import os
+import re
+import tempfile
+from datetime import datetime, timedelta
+from azure.storage.blob import BlobServiceClient, BlobSasPermissions, generate_blob_sas
+
+
+class BlobStorageClient:
+    """
+    Handles all Azure Blob Storage operations: container creation, file upload, and SAS generation.
+    """
+    def __init__(self, connection_string: str):
+        self.blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+
+    def create_container_if_not_exists(self, container_name: str):
+        container_client = self.blob_service_client.get_container_client(container_name)
+        if not container_client.exists():
+            container_client.create_container()
+        return container_client
+
+    def sanitize_string(self, value: str) -> str:
+        value = re.sub(r'[^\w\-]', '_', value.strip())
+        return re.sub(r'_+', '_', value)
+
+    def rename_file(self, original_filename: str, obligor: str, industry: str, quarter: str, year: int) -> str:
+        name, ext = os.path.splitext(original_filename)
+        sanitized_name = self.sanitize_string(name)
+        sanitized_obligor = self.sanitize_string(obligor)
+        sanitized_industry = self.sanitize_string(industry)
+        timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+        return f"{sanitized_name}_{sanitized_obligor}_{sanitized_industry}_{quarter}_{year}_{timestamp}{ext}"
+
+    def upload_file_from_bytes(self, container_name: str, blob_name: str, file_bytes: bytes):
+        container_client = self.create_container_if_not_exists(container_name)
+        blob_client = container_client.get_blob_client(blob_name)
+        blob_client.upload_blob(file_bytes, overwrite=True)
+        return blob_client.url
+
+    def generate_sas_url(self, container_name: str, blob_name: str, account_name: str, account_key: str) -> str:
+        start_time = datetime.utcnow() - timedelta(minutes=5)
+        expiry_time = datetime.utcnow() + timedelta(days=5 * 365)
+
+        sas_token = generate_blob_sas(
+            account_name=account_name,
+            container_name=container_name,
+            blob_name=blob_name,
+            account_key=account_key,
+            permission=BlobSasPermissions(read=True),
+            expiry=expiry_time,
+            start=start_time
+        )
+
+        return f"https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}?{sas_token}"
+
+
+# File: app/blob/blob_uploader.py
+
+import base64
+from datetime import datetime
+from typing import List
+from app.models.blob_metadata import FileMeta
+from app.blob.blob_client import BlobStorageClient
+from app.db.mongo_ops import update_document_blob_info
+
+
+class BlobUploader:
+    def __init__(self, blob_client: BlobStorageClient, account_name: str, account_key: str):
+        self.blob_client = blob_client
+        self.account_name = account_name
+        self.account_key = account_key
+
+    async def upload_files(self, container_name: str, files: List[FileMeta]) -> List[dict]:
+        result = []
+
+        for file in files:
+            blob_name = self.blob_client.rename_file(
+                original_filename=file.original_filename,
+                obligor=file.obligor,
+                industry=file.industry,
+                quarter=file.quarter,
+                year=file.year
+            )
+
+            file_bytes = base64.b64decode(file.base64_content)
+
+            blob_url = self.blob_client.upload_file_from_bytes(
+                container_name=container_name,
+                blob_name=blob_name,
+                file_bytes=file_bytes
+            )
+
+            sas_url = self.blob_client.generate_sas_url(
+                container_name=container_name,
+                blob_name=blob_name,
+                account_name=self.account_name,
+                account_key=self.account_key
+            )
+
+            # Update MongoDB with blob info
+            await update_document_blob_info(
+                run_id=file.run_id,
+                doc_id=file.doc_id,
+                renamed_filename=blob_name,
+                blob_path=blob_name,
+                sas_url=sas_url,
+                step_name="blob_upload",
+                step_result="SUCCESS"
+            )
+
+            result.append({
+                "doc_id": file.doc_id,
+                "blob_name": blob_name,
+                "sas_url": sas_url,
+                "metadata": {
+                    "year": file.year,
+                    "quarter": file.quarter,
+                    "industry": file.industry,
+                    "obligor": file.obligor,
+                    "original_filename": file.original_filename
+                }
+            })
+
+        return result
+
+
+# File: app/models/blob_metadata.py
+
+from pydantic import BaseModel
+
+
+class FileMeta(BaseModel):
+    run_id: str
+    doc_id: str
+    original_filename: str
+    base64_content: str
+    year: int
+    quarter: str
+    industry: str
+    obligor: str
