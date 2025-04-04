@@ -1,0 +1,109 @@
+from datetime import datetime
+from typing import List
+from motor.motor_asyncio import AsyncIOMotorClient
+from app.models.blob_metadata import FileMeta
+
+
+class MongoBlobService:
+    """
+    Service class responsible for interacting with MongoDB
+    for blob upload-related document operations.
+    """
+
+    def __init__(self, mongo_uri: str, db_name: str):
+        """
+        Initializes the async Mongo client and sets up the collection.
+
+        :param mongo_uri: MongoDB connection URI
+        :param db_name: MongoDB database name
+        """
+        self.client = AsyncIOMotorClient(mongo_uri)
+        self.db = self.client[db_name]
+        self.run_collection = self.db["run_management"]
+
+    async def update_document_blob_info(
+        self,
+        run_id: str,
+        doc_id: str,
+        renamed_filename: str,
+        blob_path: str,
+        sas_url: str,
+        step_name: str,
+        step_result: str
+    ):
+        """
+        Updates the blob metadata and step status for a specific document within the nested structure.
+
+        :param run_id: Identifier of the run
+        :param doc_id: Unique document ID within the run
+        :param renamed_filename: Blob-safe renamed filename
+        :param blob_path: Path of the blob inside container
+        :param sas_url: Secure access URL to blob
+        :param step_name: Step performed (e.g., blob_upload)
+        :param step_result: Status of the step (e.g., SUCCESS, FAIL)
+        """
+        timestamp = datetime.utcnow().isoformat()
+
+        await self.run_collection.update_one(
+            {
+                "run_id": run_id,
+                "metadata.industries.obligors.documents.doc_id": doc_id
+            },
+            {
+                "$set": {
+                    "metadata.$[].industries.$[].obligors.$[].documents.$[doc].renamed_filename": renamed_filename,
+                    "metadata.$[].industries.$[].obligors.$[].documents.$[doc].blob_path": blob_path,
+                    "metadata.$[].industries.$[].obligors.$[].documents.$[doc].sas_url": sas_url
+                },
+                "$push": {
+                    "metadata.$[].industries.$[].obligors.$[].documents.$[doc].steps": {
+                        "step_name": step_name,
+                        "result": step_result,
+                        "timestamp": timestamp
+                    }
+                }
+            },
+            array_filters=[
+                {"doc.doc_id": doc_id}
+            ]
+        )
+
+    async def get_files_for_blob_upload(self, run_id: str, year: int, quarter: str) -> List[FileMeta]:
+        """
+        Fetches all documents for a specific run, quarter, and year that have not been uploaded.
+
+        :param run_id: Run ID
+        :param year: Year for the target documents
+        :param quarter: Quarter for the target documents
+        :return: List of FileMeta objects ready for blob upload
+        """
+        run_doc = await self.run_collection.find_one({"run_id": run_id})
+        if not run_doc:
+            return []
+
+        file_list = []
+
+        for year_entry in run_doc.get("metadata", []):
+            if year_entry.get("year") != year or year_entry.get("quarter") != quarter:
+                continue
+
+            for industry_obj in year_entry.get("industries", []):
+                industry = industry_obj.get("industry")
+                for obligor_obj in industry_obj.get("obligors", []):
+                    obligor = obligor_obj.get("obligor_name")
+                    for doc in obligor_obj.get("documents", []):
+                        if doc.get("sas_url"):
+                            continue
+
+                        file_list.append(FileMeta(
+                            run_id=run_id,
+                            doc_id=doc.get("doc_id"),
+                            original_filename=doc.get("original_filename"),
+                            base64_content=doc.get("base64"),
+                            year=year,
+                            quarter=quarter,
+                            industry=industry,
+                            obligor=obligor
+                        ))
+
+        return file_list
