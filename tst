@@ -1,0 +1,190 @@
+import base64
+import asyncio
+from datetime import datetime
+from typing import List
+from app.models.blob_metadata import FileMeta
+from app.blob.blob_client import BlobStorageClient
+from app.db.mongo_ops import MongoBlobService
+
+
+class BlobUploaderFactory:
+    """
+    Factory class to create BlobUploader instances configured with Azure credentials.
+    """
+
+    def __init__(self, mongo_uri: str, db_name: str):
+        from common_services.azure_blob_connection_manager import AzureBlobConnectionManager
+
+        self._conn_mgr = AzureBlobConnectionManager()
+        self.blob_client = BlobStorageClient(self._conn_mgr.get_blob_service_client())
+        self.account_name = self._conn_mgr.blob_account_name
+        self.account_key = self._conn_mgr.blob_account_key
+        self.mongo_service = MongoBlobService(mongo_uri=mongo_uri, db_name=db_name)
+
+    def get_blob_uploader(self):
+        """
+        Returns a BlobUploader instance.
+        """
+        return BlobUploader(
+            blob_client=self.blob_client,
+            account_name=self.account_name,
+            account_key=self.account_key,
+            mongo_service=self.mongo_service
+        )
+
+
+class BlobUploader:
+    """
+    Manages batch upload of documents to Azure Blob Storage
+    and logs each step into MongoDB.
+    """
+
+    def __init__(
+        self,
+        blob_client: BlobStorageClient,
+        account_name: str,
+        account_key: str,
+        mongo_service: MongoBlobService
+    ):
+        self.blob_client = blob_client
+        self.account_name = account_name
+        self.account_key = account_key
+        self.mongo_service = mongo_service
+
+    async def upload_files(
+        self,
+        run_id: str,
+        tenant_id: str,
+        engagement_id: str,
+        year: int,
+        quarter: str
+    ) -> List[dict]:
+        """
+        Uploads all documents for a given run_id + year + quarter combination
+        and writes SAS info into MongoDB.
+
+        :param run_id: Run identifier
+        :param tenant_id: Name of the tenant/client
+        :param engagement_id: Engagement/client ID
+        :param year: Year of the batch to upload
+        :param quarter: Quarter to upload (e.g., 'Q1')
+        :return: List of uploaded file summaries
+        """
+        container_name = f"{tenant_id.lower()}-{engagement_id.lower()}"
+
+        files = await self.mongo_service.get_files_for_blob_upload(
+            run_id=run_id,
+            year=year,
+            quarter=quarter
+        )
+
+        tasks = [self._upload_single_file(container_name, file) for file in files]
+        return await asyncio.gather(*tasks)
+
+    async def _upload_single_file(self, container_name: str, file: FileMeta) -> dict:
+        """
+        Uploads a single file to Azure Blob Storage and updates its status in MongoDB.
+        """
+        blob_name = self.blob_client.rename_file(
+            original_filename=file.original_filename,
+            obligor=file.obligor,
+            industry=file.industry,
+            quarter=file.quarter,
+            year=file.year
+        )
+
+        file_bytes = base64.b64decode(file.base64_content)
+
+        blob_url = self.blob_client.upload_file_from_bytes(
+            container_name=container_name,
+            blob_name=blob_name,
+            file_bytes=file_bytes
+        )
+
+        sas_url = self.blob_client.generate_sas_url(
+            container_name=container_name,
+            blob_name=blob_name,
+            account_name=self.account_name,
+            account_key=self.account_key
+        )
+
+        await self.mongo_service.update_document_blob_info(
+            run_id=file.run_id,
+            doc_id=file.doc_id,
+            renamed_filename=blob_name,
+            blob_path=blob_name,
+            sas_url=sas_url,
+            step_name="blob_upload",
+            step_result="SUCCESS"
+        )
+
+        return {
+            "doc_id": file.doc_id,
+            "blob_name": blob_name,
+            "sas_url": sas_url,
+            "metadata": {
+                "year": file.year,
+                "quarter": file.quarter,
+                "industry": file.industry,
+                "obligor": file.obligor,
+                "original_filename": file.original_filename
+            }
+        }
+
+
+# File: app/blob/blob_client.py
+
+import os
+import re
+from datetime import datetime, timedelta
+from azure.storage.blob import BlobSasPermissions, generate_blob_sas
+
+
+class BlobStorageClient:
+    """
+    Handles Azure Blob operations using a shared BlobServiceClient instance.
+    Responsible for container management, file uploads, and SAS URL generation.
+    """
+
+    def __init__(self, blob_service_client):
+        self.blob_service_client = blob_service_client
+
+    def create_container_if_not_exists(self, container_name: str):
+        container_client = self.blob_service_client.get_container_client(container_name)
+        if not container_client.exists():
+            container_client.create_container()
+        return container_client
+
+    def sanitize_string(self, value: str) -> str:
+        value = re.sub(r'[^\w\-]', '_', value.strip())
+        return re.sub(r'_+', '_', value)
+
+    def rename_file(self, original_filename: str, obligor: str, industry: str, quarter: str, year: int) -> str:
+        name, ext = os.path.splitext(original_filename)
+        sanitized_name = self.sanitize_string(name)
+        sanitized_obligor = self.sanitize_string(obligor)
+        sanitized_industry = self.sanitize_string(industry)
+        timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+        return f"{sanitized_name}_{sanitized_obligor}_{sanitized_industry}_{quarter}_{year}_{timestamp}{ext}"
+
+    def upload_file_from_bytes(self, container_name: str, blob_name: str, file_bytes: bytes):
+        container_client = self.create_container_if_not_exists(container_name)
+        blob_client = container_client.get_blob_client(blob_name)
+        blob_client.upload_blob(file_bytes, overwrite=True)
+        return blob_client.url
+
+    def generate_sas_url(self, container_name: str, blob_name: str, account_name: str, account_key: str) -> str:
+        start_time = datetime.utcnow() - timedelta(minutes=5)
+        expiry_time = datetime.utcnow() + timedelta(days=5 * 365)
+
+        sas_token = generate_blob_sas(
+            account_name=account_name,
+            container_name=container_name,
+            blob_name=blob_name,
+            account_key=account_key,
+            permission=BlobSasPermissions(read=True),
+            expiry=expiry_time,
+            start=start_time
+        )
+
+        return f"https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}?{sas_token}"
