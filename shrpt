@@ -1,0 +1,140 @@
+import os
+import re
+import json
+from office365.sharepoint.client_context import ClientContext
+from office365.runtime.auth.authentication_context import AuthenticationContext
+
+# ====== 🔧 CONFIGURE THESE ==========
+SITE_URL = "https://<your-tenant>.sharepoint.com/sites/AppleBankAndCitiPOC"
+CLIENT_ID = "<your-client-id>"
+CLIENT_SECRET = "<your-client-secret>"
+ROOT_FOLDER = "Shared Documents/General/test_bank"
+# ====================================
+
+def connect_to_sharepoint():
+    ctx_auth = AuthenticationContext(SITE_URL)
+    if not ctx_auth.acquire_token_for_app(client_id=CLIENT_ID, client_secret=CLIENT_SECRET):
+        raise Exception("SharePoint authentication failed!")
+    return ClientContext(SITE_URL, ctx_auth)
+
+def extract_year_quarter(folder_name: str):
+    """
+    Parses folder name like 'Q1_2025' or 'Q1 2025' → ("Q1", 2025)
+    """
+    match = re.match(r"(Q[1-4])[\s_](20\\d{2})", folder_name)
+    if match:
+        return match.group(1), int(match.group(2))
+    return None, None
+
+def get_files_recursively(ctx, folder):
+    files_collected = []
+
+    # Files
+    files = folder.files
+    ctx.load(files)
+    ctx.execute_query()
+    for file in files:
+        file_name = file.properties["Name"]
+        files_collected.append(file_name)
+
+    # Subfolders
+    subfolders = folder.folders
+    ctx.load(subfolders)
+    ctx.execute_query()
+    for sub in subfolders:
+        sub_name = os.path.basename(sub.properties["ServerRelativeUrl"])
+        sub_files = get_files_recursively(ctx, sub)
+        files_collected.extend([f"{sub_name}/{f}" for f in sub_files])
+
+    return files_collected
+
+def parse_sharepoint_structure():
+    ctx = connect_to_sharepoint()
+
+    root = ctx.web.get_folder_by_server_relative_url(ROOT_FOLDER)
+    ctx.load(root.folders)
+    ctx.execute_query()
+
+    if not root.folders:
+        print("❌ No folders found under 'test_bank'.")
+        return None
+
+    result = {
+        "quarters": []
+    }
+
+    for quarter_folder in root.folders:
+        q_folder_name = os.path.basename(quarter_folder.properties["ServerRelativeUrl"])
+        quarter, year = extract_year_quarter(q_folder_name)
+
+        if not quarter or not year:
+            continue  # Skip non-quarter folders
+
+        print(f"\n📁 Scanning quarter folder: {q_folder_name} ({quarter}, {year})")
+
+        quarter_obj = {
+            "year": year,
+            "quarter": quarter,
+            "industries": []
+        }
+
+        ctx.load(quarter_folder.folders)
+        ctx.execute_query()
+
+        if not quarter_folder.folders:
+            print(f"⚠️ No industry folders found in: {q_folder_name}")
+            continue
+
+        for industry_folder in quarter_folder.folders:
+            industry_name = os.path.basename(industry_folder.properties["ServerRelativeUrl"])
+            print(f"  └─ Industry: {industry_name}")
+
+            industry_obj = {
+                "industry": industry_name,
+                "obligors": []
+            }
+
+            ctx.load(industry_folder.folders)
+            ctx.execute_query()
+
+            if not industry_folder.folders:
+                print(f"    ⚠️ No obligor folders under industry: {industry_name}")
+                continue
+
+            for obligor_folder in industry_folder.folders:
+                obligor_name = os.path.basename(obligor_folder.properties["ServerRelativeUrl"])
+                print(f"    └─ Obligor: {obligor_name}")
+
+                files = get_files_recursively(ctx, obligor_folder)
+
+                if not files:
+                    print(f"      ⚠️ No files found for obligor: {obligor_name}")
+                    continue
+
+                industry_obj["obligors"].append({
+                    "obligor": obligor_name,
+                    "files": files
+                })
+
+            if industry_obj["obligors"]:
+                quarter_obj["industries"].append(industry_obj)
+
+        if quarter_obj["industries"]:
+            result["quarters"].append(quarter_obj)
+        else:
+            print(f"❌ Quarter folder '{q_folder_name}' has no valid data.")
+
+    if not result["quarters"]:
+        print(\"\\n🚫 No valid quarter/industry/obligor data found.\")
+        return None
+
+    return result
+
+
+if __name__ == \"__main__\":
+    parsed_data = parse_sharepoint_structure()
+    if parsed_data:
+        print(\"\\n📦 Final Metadata Output:\")
+        print(json.dumps(parsed_data, indent=2))
+    else:
+        print(\"\\n❗ No usable data found in SharePoint structure.\")
